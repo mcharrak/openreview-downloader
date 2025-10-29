@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+venv/
+*.venv/
+env/
+ENV/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# --- NEW: Ignore generated review files ---
+# Ignore the new "reviews" folder
+reviews/
+
+# Ignore any old review files accidentally left in the root
+reviews_*.md
+reviews_*.txt

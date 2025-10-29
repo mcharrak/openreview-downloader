@@ -26,9 +26,11 @@ This is a major frustration during the high-pressure rebuttal period.
 
 This script uses the official OpenReview API to log in as you and download the **original raw text** of your reviews, perfectly preserving all LaTeX and Markdown.
 
-It saves the reviews in two clean files, ready for any use:
-* `reviews_[PAPER_ID].md` (A formatted Markdown file)
-* `reviews_[PAPER_ID].txt` (A plain text file)
+It saves the reviews in two clean files inside a new `reviews/` folder. This folder is automatically created and ignored by Git (via `.gitignore`) to protect your privacy and prevent you from accidentally committing your private reviews.
+
+Your files will be saved as:
+* `reviews/reviews_[PAPER_ID].md` (A formatted Markdown file)
+* `reviews/reviews_[PAPER_ID].txt` (A plain text file)
 
 ---
 
@@ -55,46 +57,36 @@ It saves the reviews in two clean files, ready for any use:
 
 ## How to Use
 
-The script offers two ways to run. You will be securely prompted for your OpenReview password.
+The script offers two ways to run. You will be securely prompted for your OpenReview login password.
 
-### Recommended Method (Just paste your URL)
+### Recommended Method (Paste your URL)
 
-The script will automatically parse the `forum_id` (and `venue_id` if possible) from the link.
+1.  **Find Your Paper's URL:**
+    * Log in to OpenReview and go to your Author Console for the conference (e.g., "AAAI 2026 Author Console").
+    * You will see a table of your submissions with columns like **{Submission Summary, Official Review, Decision}**.
+    * Under the **"Submission Summary"** column, **right-click on your paper's title**.
+    * Select **"Copy Link Address"** (or similar) from the context menu. This is the best link to use, as it contains all the info the script needs.
 
-1.  Find the URL of your paper's OpenReview page.
-2.  Run the script with the `--url` and `--email` flags:
+2.  **Run the Script:**
+    Paste the copied URL in the `--url` argument. The script is robust and works with all OpenReview URL formats:
+    * **Long URLs (best):** `...&referrer=[Author%20Console](...)`
+    * **Short URLs:** `...?id=...`
+    * **Fragment URLs:** `...?id=...#discussion`
 
     ```bash
-    python download_reviews.py --email "your_email@domain.com" --url "[https://openreview.net/forum?id=NDRzOSnDOq&referrer=...AAAI.org/2026/Conference](https://openreview.net/forum?id=NDRzOSnDOq&referrer=...AAAI.org/2026/Conference)..."
+    python download_reviews.py --email "your_email@domain.com" --url "PASTE_THE_COPIED_URL_HERE"
+    ```
+    *Example:*
+    ```bash
+    python download_reviews.py --email "amine.mcharrak@cs.ox.ac.uk" --url "[https://openreview.net/forum?id=sIpIjUCPso&referrer=%5BAuthor%20Console%5D](https://openreview.net/forum?id=sIpIjUCPso&referrer=%5BAuthor%20Console%5D)(...)"
     ```
 
 ### Backup Method (Manual IDs)
 
-If the URL parsing fails (especially for the `venue_id`), you can provide the IDs manually.
+If URL parsing fails (e.g., you don't have the `referrer` link), the script will ask you to provide the `venue_id` manually.
 
-* `forum_id`: The `id` from the URL (e.g., `NDRzOSnDOq`)
+* `forum_id`: The `id` from the URL (e.g., `sIpIjUCPso`)
 * `venue_id`: The conference ID (e.g., `AAAI.org/2026/Conference`)
 
 ```bash
-python download_reviews.py --email "your_email@domain.com" --forum_id "NDRzOSnDOq" --venue_id "AAAI.org/2026/Conference"
-```
-
-### Success!
-
-The script will log in, fetch the reviews, and you will see:
-
-```
-✅ Success! All 5 reviews have been saved.
-Markdown file: reviews_NDRzOSnDOq.md
-Text file:     reviews_NDRzOSnDOq.txt
-```
-
----
-
-## Contributing
-
-Found a bug or have an improvement? Feel free to open an issue or submit a pull request!
-
-## License
-
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+python download_reviews.py --email "your_email@domain.com" --forum_id "sIpIjUCPso" --venue_id "AAAI.org/2026/Conference"
