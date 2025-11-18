@@ -21,3 +21,6 @@ reviews/
 # Ignore any old review files accidentally left in the root
 reviews_*.md
 reviews_*.txt
+
+# Debug files
+debug.py

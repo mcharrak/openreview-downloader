@@ -3,7 +3,7 @@ import getpass
 import sys
 import argparse
 from urllib.parse import urlparse, parse_qs
-import os  # <-- ADDED THIS IMPORT
+import os
 
 def parse_url(url):
     """
@@ -40,8 +40,8 @@ def parse_url(url):
 
 def fetch_reviews(client, forum_id, venue_id):
     """
-    Fetches the review notes, trying multiple common invitation IDs before
-    falling back to a broad search.
+    Fetches the review notes. If venue_id is provided, it tries smart-guessing
+    invitations first. If not, it skips directly to the broad search.
     """
     
     reviews = []
@@ -77,26 +77,52 @@ def fetch_reviews(client, forum_id, venue_id):
     
     try:
         all_replies = client.get_all_notes(forum=forum_id)
+        
+        # We return ALL replies, filtering out the original submission.
+        # The main() function will do the smart sifting.
         reviews = [
             r for r in all_replies 
-            if r.id != forum_id and ('review' in r.content or 'comment' in r.content)
+            if r.id != forum_id
         ]
         
         if reviews:
-            try:
-                actual_invitation = reviews[0].invitation
-                print(f"\nBroad search found {len(reviews)} reviews.")
-                print(f"✨ Info: These reviews appear to use the invitation: '{actual_invitation}'")
-            except Exception:
-                pass 
-            
+            print(f"\nBroad search found {len(reviews)} total replies. Sifting for reviews...")
             return reviews
+        else:
+            print("\nBroad search found 0 replies to this forum.")
+            return []
 
     except Exception as e:
         print(f"Broad search failed: {e}")
         return []
 
     return []
+
+# --- NEW HELPER FUNCTION ---
+def extract_text_from_value(content_item):
+    """
+    Extracts text from various OpenReview value formats.
+    e.g., "string", {"value": "string"}, {"value": 8}, {"value": ["list"]}
+    """
+    extracted_text = None
+    
+    # 1. Check for {"value": ...} structure
+    if isinstance(content_item, dict) and 'value' in content_item:
+        value = content_item['value']
+        if isinstance(value, str):
+            extracted_text = value
+        elif isinstance(value, (int, float)):
+            extracted_text = str(value)
+        elif isinstance(value, list):
+            extracted_text = ", ".join(str(v) for v in value)
+    
+    # 2. Check for direct "key": "string" structure
+    elif isinstance(content_item, str):
+        extracted_text = content_item
+        
+    if extracted_text and extracted_text.strip():
+        return extracted_text
+    return None
 
 def main():
     parser = argparse.ArgumentParser(
@@ -127,19 +153,26 @@ def main():
         print("\nError: Could not determine Paper Forum ID. Please provide it via --url or --forum_id.")
         sys.exit(1)
 
+    # --- 2. Get Credentials ---
     try:
-        password = getpass.getpass(prompt=f"Enter OpenReview password for {args.email}: ")
+        # Strip smart quotes and whitespace in case of copy-paste errors
+        email_to_use = args.email.strip().strip("“”'\"")
+        
+        if email_to_use != args.email:
+            print(f"Cleaned email from '{args.email}' to '{email_to_use}'")
+        
+        password = getpass.getpass(prompt=f"Enter OpenReview password for {email_to_use}: ")
         client = openreview.api.OpenReviewClient(
             baseurl='https://api2.openreview.net',
-            username=args.email,
+            username=email_to_use, # Use the cleaned email
             password=password
         )
-        print(f"\nSuccessfully logged in as {args.email} (using v2 API).")
+        print(f"\nSuccessfully logged in as {email_to_use} (using v2 API).")
     
     except Exception as e:
         print(f"\nLogin failed: {e}")
-        if '401' in str(e):
-             print("This is an 'Unauthorized' error. Please double-check your credentials.")
+        if '401' in str(e) or '400' in str(e): # 400 is "Invalid username or password"
+             print("This is an 'Invalid username or password' error. Please double-check your credentials.")
         sys.exit(1)
 
     if not venue_id:
@@ -155,60 +188,124 @@ def main():
             print(f"Warning: Could not auto-detect Venue ID: {e}")
             print("Will proceed with broad search fallback.")
 
-    reviews = fetch_reviews(client, forum_id, venue_id)
+    # --- 4. Fetch Reviews ---
+    replies = fetch_reviews(client, forum_id, venue_id)
 
-    if not reviews:
-        print("\nNo reviews were found. They may not be available or visible to you yet.")
+    if not replies:
+        print("\nNo replies were found for this paper. Reviews may not be available or visible to you yet.")
         sys.exit(0)
 
     # --- 5. Write to Files ---
     
-    # --- NEW: Create a directory for reviews ---
     OUTPUT_DIR = "reviews"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # --- NEW: Update output paths to use the new directory ---
     output_filename_md = os.path.join(OUTPUT_DIR, f"reviews_{forum_id}.md")
     output_filename_txt = os.path.join(OUTPUT_DIR, f"reviews_{forum_id}.txt")
     
-    print(f"\n--- Found {len(reviews)} review(s). Now writing to {output_filename_md} and {output_filename_txt}... --- \n")
-
+    print(f"\n--- Sifting {len(replies)} replies... Now writing actual reviews to {output_filename_md} and {output_filename_txt} --- \n")
+    
+    found_review_count = 0
+    
+    # --- NEW: Define all keys that might contain review text ---
+    # This list is lowercase and in a sensible order.
+    # We will check for these case-insensitively.
+    text_field_keys = [
+        'review', # For simple, single-field reviews
+        'comment', # For simple, single-field reviews
+        'summary',
+        'soundness',
+        'presentation',
+        'contribution',
+        'strengths',
+        'weaknesses',
+        'limitations',
+        'questions',
+        'rating',
+        'confidence',
+        'recommendation',
+        'reason_for_rating',
+        'flag_for_ethics_review',
+        'details_of_ethics_concerns',
+        'code_of_conduct',
+    ]
+    
     try:
         with open(output_filename_md, 'w', encoding='utf-8') as f_md, \
              open(output_filename_txt, 'w', encoding='utf-8') as f_txt:
             
-            for i, rev in enumerate(reviews):
-                print(f"Processing Review (ID: {rev.id})...")
-
-                f_md.write(f"## Review (ID: {rev.id})\n\n")
-                f_txt.write(f"--- Review (ID: {rev.id}) ---\n\n")
-
-                raw_text = None
-                if 'review' in rev.content and 'value' in rev.content['review']:
-                    raw_text = rev.content['review']['value']
-                elif 'comment' in rev.content and 'value' in rev.content['comment']:
-                    raw_text = rev.content['comment']['value']
+            for i, note in enumerate(replies):
                 
-                if raw_text:
-                    f_md.write(raw_text)
-                    f_txt.write(raw_text)
+                raw_text_parts = []
+                
+                # --- NEW: Smart Sifting Logic ---
+                
+                # Create a lowercase mapping of the note's content keys
+                # This handles 'code_of_conduct' and 'Code of Conduct'
+                content_keys_lower = {k.lower().replace('_', ' '): k for k in note.content.keys()}
+                
+                # 1. Check for "simple" review keys first
+                simple_review_text = None
+                if 'review' in content_keys_lower:
+                    simple_review_text = extract_text_from_value(note.content[content_keys_lower['review']])
+                elif 'comment' in content_keys_lower:
+                    simple_review_text = extract_text_from_value(note.content[content_keys_lower['comment']])
+                
+                if simple_review_text:
+                    raw_text_parts.append(simple_review_text)
+                
+                # 2. If not a simple review, check for "multi-key" review
                 else:
-                    f_md.write("*Could not find 'review' or 'comment' text.*\n")
-                    f_txt.write("Could not find 'review' or 'comment' text.\n")
-                    print(f"Warning: Could not find text for Review (ID: {rev.id}).")
+                    for key_to_find in text_field_keys:
+                        # Find the original (cased) key
+                        original_key = content_keys_lower.get(key_to_find)
+                        
+                        if original_key:
+                            content_item = note.content[original_key]
+                            extracted_text = extract_text_from_value(content_item)
+                            
+                            if extracted_text:
+                                # Format a nice title, e.g., "Summary_Of_Review" -> "Summary of Review"
+                                title = original_key.replace('_', ' ').title()
+                                raw_text_parts.append(f"### {title}\n\n{extracted_text}")
                 
-                f_md.write("\n\n---\n\n")
-                f_txt.write("\n\n" + "="*80 + "\n\n")
+                # --- End of Sifting Logic ---
+                
+                # If we found any text parts, this is a review we can save.
+                if raw_text_parts:
+                    found_review_count += 1
+                    print(f"Processing Review {found_review_count} (ID: {note.id})...")
+                    
+                    final_raw_text = "\n\n".join(raw_text_parts)
 
-        print(f"\n✅ Success! All {len(reviews)} reviews have been saved.")
-        print(f"Markdown file: {output_filename_md}")
-        print(f"Text file:     {output_filename_txt}")
+                    f_md.write(f"## Review {found_review_count} (ID: {note.id})\n\n")
+                    f_txt.write(f"--- Review {found_review_count} (ID: {note.id}) ---\n\n")
+
+                    f_md.write(final_raw_text)
+                    f_txt.write(final_raw_text)
+                    
+                    f_md.write("\n\n---\n\n")
+                    f_txt.write("\n\n" + "="*80 + "\n\n")
 
     except Exception as e:
         print(f"Error writing to file: {e}")
         sys.exit(1)
 
+    # --- Final check ---
+    if found_review_count == 0:
+        print(f"\nNo reviews with parseable text fields were found among the {len(replies)} replies.")
+        print("This can happen if the review structure is unknown or reviews are not visible to the API.")
+        
+        try:
+            os.remove(output_filename_md)
+            os.remove(output_filename_txt)
+        except OSError:
+            pass # Files may not have been created
+    else:
+        print(f"\n✅ Success! All {found_review_count} reviews have been saved.")
+        print(f"Markdown file: {output_filename_md}")
+        print(f"Text file:     {output_filename_txt}")
+
 
 if __name__ == "__main__":
     main()
-    
