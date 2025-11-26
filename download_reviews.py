@@ -10,7 +10,6 @@ def parse_url(url):
     Parses the OpenReview URL to extract forum_id and potentially venue_id.
     """
     try:
-        # Robustness Fix: Remove any URL fragment (e.g., #discussion)
         if '#' in url:
             url = url.split('#', 1)[0]
             
@@ -75,8 +74,6 @@ def fetch_reviews(client, forum_id, venue_id):
     
     try:
         all_replies = client.get_all_notes(forum=forum_id)
-        
-        # We return ALL replies, filtering out the original submission.
         reviews = [
             r for r in all_replies 
             if r.id != forum_id
@@ -95,7 +92,6 @@ def fetch_reviews(client, forum_id, venue_id):
 
     return []
 
-# --- NEW HELPER FUNCTION ---
 def extract_text_from_value(content_item):
     """
     Extracts text from various OpenReview value formats.
@@ -103,7 +99,6 @@ def extract_text_from_value(content_item):
     """
     extracted_text = None
     
-    # 1. Check for {"value": ...} structure
     if isinstance(content_item, dict) and 'value' in content_item:
         value = content_item['value']
         if isinstance(value, str):
@@ -113,7 +108,6 @@ def extract_text_from_value(content_item):
         elif isinstance(value, list):
             extracted_text = ", ".join(str(v) for v in value)
     
-    # 2. Check for direct "key": "string" structure
     elif isinstance(content_item, str):
         extracted_text = content_item
         
@@ -123,13 +117,10 @@ def extract_text_from_value(content_item):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download OpenReview reviews as raw text and Markdown.",
-        epilog="Example (URL): python download_reviews.py --email u@x.com --url 'https://openreview.net/forum?id=...'\n" \
-               "Example (Manual): python download_reviews.py --email u@x.com --forum_id '...-f_id' --venue_id 'Conf.org/Year/Venue'"
+        description="Download OpenReview reviews as raw text and Markdown."
     )
     parser.add_argument('--email', type=str, required=True, help="Your OpenReview login email.")
     parser.add_argument('--url', type=str, help="The full OpenReview URL of your paper.")
-    
     parser.add_argument('--forum_id', type=str, help="Manual override for paper's forum ID.")
     parser.add_argument('--venue_id', type=str, help="Manual override for the venue ID.")
 
@@ -191,34 +182,6 @@ def main():
     
     found_review_count = 0
     
-    # --- UPDATED: Comprehensive list of keys for AISTATS, ICLR, NeurIPS, etc. ---
-    text_field_keys = [
-        # Standard
-        'review', 'comment', 
-        
-        # Summaries
-        'summary', 'summary_of_review', 'summary_and_contributions',
-        
-        # Content Fields
-        'strengths', 'weaknesses', 'limitations', 'questions',
-        'clarity', 'relation_to_prior_work', 'reproducibility',
-        'novelty', 'significance',
-        
-        # Justifications (AISTATS style)
-        'soundness_justification',
-        'significance_justification',
-        'novelty_justification',
-        'technical_quality_justification',
-        'empirical_evaluation_justification',
-        
-        # Scores (checked last so text appears first usually)
-        'rating', 'confidence', 'recommendation', 
-        'soundness', 'presentation', 'contribution',
-        
-        # Ethics
-        'flag_for_ethics_review', 'details_of_ethics_concerns', 'code_of_conduct',
-    ]
-    
     try:
         with open(output_filename_md, 'w', encoding='utf-8') as f_md, \
              open(output_filename_txt, 'w', encoding='utf-8') as f_txt:
@@ -227,36 +190,29 @@ def main():
                 
                 raw_text_parts = []
                 
-                # Create a lowercase mapping of the note's content keys
-                # This handles 'Summary And Contributions' -> 'summary and contributions'
-                content_keys_lower = {k.lower().replace('_', ' '): k for k in note.content.keys()}
+                # --- DYNAMIC AUTOMATION LOGIC ---
+                # Instead of looking for specific keys, we iterate through EVERYTHING in the content.
+                # OpenReview API usually returns content in the order it was defined in the form.
                 
-                # Check for keys in our priority list
-                for key_to_find in text_field_keys:
-                    
-                    # Normalize key to find (handle spaces vs underscores)
-                    key_to_find_spaces = key_to_find.replace('_', ' ')
-                    
-                    # Check if this key exists in the note
-                    found_key = None
-                    if key_to_find in content_keys_lower:
-                        found_key = content_keys_lower[key_to_find]
-                    elif key_to_find_spaces in content_keys_lower:
-                        found_key = content_keys_lower[key_to_find_spaces]
+                if note.content:
+                    for key, content_item in note.content.items():
                         
-                    if found_key:
-                        content_item = note.content[found_key]
+                        # Extract the text regardless of the key name
                         extracted_text = extract_text_from_value(content_item)
                         
                         if extracted_text:
-                            # Format title
-                            title = found_key.replace('_', ' ').title()
+                            # Clean up the key for the header (e.g. "soundness_justification" -> "Soundness Justification")
+                            # Handle keys that might already have spaces
+                            title = key.replace('_', ' ').title()
                             
-                            # For simple keys like "Review", skip title
+                            # Special handling for "Review" or "Comment" keys
+                            # If the key is literally "Review", we usually don't need a "### Review" header
+                            # as it's redundant with the "Review X" top header.
                             if title.lower() in ['review', 'comment']:
                                 raw_text_parts.append(extracted_text)
                             else:
                                 raw_text_parts.append(f"### {title}\n\n{extracted_text}")
+                
                 
                 if raw_text_parts:
                     found_review_count += 1
