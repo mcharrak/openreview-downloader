@@ -7,7 +7,7 @@ Main features
 - Parses common OpenReview URLs and extracts an id.
 - Resolves root forum id if user pastes a review/comment note URL.
 - Tries OpenReview API v2 first, then falls back to API v1.
-- Fetches forum replies broadly, then classifies notes heuristically.
+- Fetches the complete readable forum thread, then classifies notes heuristically.
 - Exports raw text/Markdown/LaTeX content to md/txt/json.
 
 This script is designed for rebuttal/review workflows where web copy-paste
@@ -192,6 +192,9 @@ def timestamp_ms_to_iso(ms: Optional[int]) -> Optional[str]:
 
 
 def get_note_attr(note: Any, attr: str, default: Any = None) -> Any:
+    """Read an OpenReview attribute from either v1/v2 objects or JSON dicts."""
+    if isinstance(note, dict):
+        return note.get(attr, default)
     return getattr(note, attr, default)
 
 
@@ -619,9 +622,14 @@ def infer_venue_id_from_submission_note(submission_note: Any) -> Optional[str]:
 def fetch_replies_robust(client: Any, forum_id: str, venue_id: Optional[str], debug: bool = False) -> List[Any]:
     """
     Retrieval strategy:
-    1) broad fetch by forum id
-    2) fallback by replyto
-    3) fallback by common invitation names if venue id is known
+    1) fetch the complete readable thread by forum id
+    2) supplement it with direct replies to the root note
+    3) use venue/invitation fallbacks only when both thread routes fail
+
+    The direct-reply request is intentionally *not* conditional on the forum
+    request returning no results. Some venue configurations expose a partial
+    thread through one route while exposing root-level decision notes through
+    the other. De-duplication by note id makes the union safe.
     """
     collected: List[Any] = []
     seen: set[str] = set()
@@ -637,18 +645,17 @@ def fetch_replies_robust(client: Any, forum_id: str, venue_id: Optional[str], de
                 collected.append(n)
         debug_print(debug, f"{source}: +{len(seen)-before}, total={len(seen)}")
 
-    # Main path
+    # Main path: forum normally contains every visible nested and direct note.
     try:
         add_notes(get_all_notes_safe(client, forum=forum_id), "get_all_notes(forum=...)")
     except Exception as e:
         debug_print(debug, f"forum fetch failed: {e}")
 
-    # Fallback: direct replies only
-    if not collected:
-        try:
-            add_notes(get_all_notes_safe(client, replyto=forum_id), "get_all_notes(replyto=...)")
-        except Exception as e:
-            debug_print(debug, f"replyto fetch failed: {e}")
+    # Supplement rather than fallback: see the retrieval-strategy note above.
+    try:
+        add_notes(get_all_notes_safe(client, replyto=forum_id), "get_all_notes(replyto=...)")
+    except Exception as e:
+        debug_print(debug, f"replyto fetch failed: {e}")
 
     # Fallback: common invitation names
     if not collected and venue_id:
@@ -707,6 +714,10 @@ def make_markdown_block(cn: ClassifiedNote, index: int) -> str:
 
     lines.append("")
 
+    if not cn.content_text_blocks:
+        lines.append("_No textual content fields were exposed for this note._")
+        lines.append("")
+
     for key, text in cn.content_text_blocks:
         token = norm_token(key)
         if token in {"review", "comment", "text", "response", "author_response", "rebuttal"}:
@@ -752,6 +763,10 @@ def make_text_block(cn: ClassifiedNote, index: int) -> str:
         lines.append(f"Modified (UTC): {mdate_iso}")
     lines.append("")
 
+    if not cn.content_text_blocks:
+        lines.append("[No textual content fields were exposed for this note.]")
+        lines.append("")
+
     for key, text in cn.content_text_blocks:
         token = norm_token(key)
         if token in {"review", "comment", "text", "response", "author_response", "rebuttal"}:
@@ -790,6 +805,25 @@ def classified_note_to_json(cn: ClassifiedNote) -> Dict[str, Any]:
     }
 
 
+def select_notes(
+    classified: Sequence[ClassifiedNote], include_set: set[str], direct_only: bool
+) -> List[ClassifiedNote]:
+    """Apply export filters without dropping notes that have no text fields.
+
+    A visible forum item can be meaningful even when its content is empty or
+    contains only a non-text field. Keeping it preserves the page's complete
+    note inventory in Markdown, text, and JSON exports.
+    """
+    selected: List[ClassifiedNote] = []
+    for cn in classified:
+        if not include_category(cn.category, include_set):
+            continue
+        if direct_only and not cn.direct_reply_to_forum:
+            continue
+        selected.append(cn)
+    return selected
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Download OpenReview forum replies (reviews/meta-reviews/decisions/comments/responses) as raw Markdown/text/JSON."
@@ -803,8 +837,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include",
         type=str,
-        default="review",
-        help="Comma-separated categories: review,meta_review,decision,comment,response,other,all (default: review)",
+        default="all",
+        help="Comma-separated categories: review,meta_review,decision,comment,response,other,all (default: all)",
     )
     parser.add_argument(
         "--formats",
@@ -838,7 +872,7 @@ def main() -> None:
     args = parse_args()
 
     try:
-        include_set = parse_csv_set(args.include, VALID_INCLUDE_TYPES) or {"review"}
+        include_set = parse_csv_set(args.include, VALID_INCLUDE_TYPES) or {"all"}
         formats = parse_csv_set(args.formats, {"md", "txt", "json"}) or {"md", "txt"}
     except ValueError as e:
         print(f"Error: {e}")
@@ -930,15 +964,7 @@ def main() -> None:
     for k in ["review", "meta_review", "decision", "comment", "response", "other"]:
         print(f"  - {k}: {counts.get(k, 0)}")
 
-    selected: List[ClassifiedNote] = []
-    for cn in classified:
-        if not include_category(cn.category, include_set):
-            continue
-        if args.direct_only and not cn.direct_reply_to_forum:
-            continue
-        if not cn.content_text_blocks:
-            continue
-        selected.append(cn)
+    selected = select_notes(classified, include_set, args.direct_only)
 
     if not selected:
         print(f"No notes matched include={sorted(include_set)}")
