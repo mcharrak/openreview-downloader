@@ -31,6 +31,7 @@ During the high-pressure rebuttal period, manually copying reviews is frustratin
 * ✅ Preserves raw LaTeX / MathJax (`$...$` and `$$...$$`)
 * ✅ Saves exports to a local `reviews/` folder
 * ✅ Supports **Markdown**, **text**, and **JSON** output
+* ✅ Exports **every readable reply by default** — reviews, replies, meta-reviews, decisions, comments, and other forum notes
 * ✅ Works across many venues via **heuristic classification** (review / meta-review / decision / comment / response)
 * ✅ Tries **API v2 first**, then falls back to **API v1**
 * ✅ Supports filtering to **direct replies only** (`--direct-only`) for cleaner rebuttal exports
@@ -100,6 +101,26 @@ The script offers multiple ways to run. You will be securely prompted for your O
 
     ```bash
     python download_reviews.py --email "max.mustermann@gmail.com" --url "https://openreview.net/forum?id=sWmLjUXPsq&referrer=%5BAuthor%20Console%5D"
+    ```
+
+    By default the export includes **all readable notes in the forum thread**,
+    not only reviewer reports. This is important because NeurIPS, ICML, ICLR,
+    AISTATS, AAAI, UAI, and other venues can publish a meta-review, decision,
+    or author/reviewer discussion as separate notes. Nested replies are also
+    included unless you explicitly choose `--direct-only`.
+
+    To intentionally make a reviewer-reports-only export, opt in to that
+    narrower filter:
+
+    ```bash
+    python download_reviews.py --email "your_email@domain.com" --url "PASTE_THE_COPIED_URL_HERE" --include review
+    ```
+
+    For a lossless, machine-readable companion to the Markdown and text
+    exports, include JSON as well:
+
+    ```bash
+    python download_reviews.py --email "your_email@domain.com" --url "PASTE_THE_COPIED_URL_HERE" --formats md,txt,json
     ```
 
 ---
